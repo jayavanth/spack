@@ -309,27 +309,36 @@ class Package(object):
     Package creators override functions like install() (all of them do this),
     clean() (some of them do this), and others to provide custom behavior.
     """
+
     #
     # These are default values for instance variables.
     #
     """By default we build in parallel.  Subclasses can override this."""
     parallel = True
+
     """# jobs to use for parallel make. If set, overrides default of ncpus."""
     make_jobs = None
+
     """By default do not run tests within package's install()"""
     run_tests = False
+
     """Most packages are NOT extendable. Set to True if you want extensions."""
     extendable = False
+
     """List of prefix-relative file paths (or a single path). If these do
        not exist after install, or if they exist but are not files,
        sanity checks fail.
     """
     sanity_check_is_file = []
+
     """List of prefix-relative directory paths (or a single path). If
        these do not exist after install, or if they exist but are not
        directories, sanity checks will fail.
     """
     sanity_check_is_dir = []
+
+    """Per-process lock objects for each install prefix."""
+    prefix_locks = {}
 
     class __metaclass__(type):
         """Ensure  attributes required by Spack directives are present."""
@@ -691,11 +700,24 @@ class Package(object):
 
     @property
     def prefix_lock(self):
+        """Prefix lock is a byte range lock on the nth byte of a file.
+
+        The lock file is ``spack.installed_db.prefix_lock`` -- the DB
+        tells us what to call it and it lives alongside the install DB.
+
+        n is the sys.maxsize-bit prefix of the DAG hash.  This makes
+        likelihood of collision is very low AND it gives us
+        readers-writer lock semantics with just a single lockfile, so no
+        cleanup required.
+        """
         if self._prefix_lock is None:
-            dirname = join_path(os.path.dirname(self.spec.prefix), '.locks')
-            basename = os.path.basename(self.spec.prefix)
-            self._prefix_lock = llnl.util.lock.Lock(
-                join_path(dirname, basename))
+            prefix = self.spec.prefix
+            if prefix not in Package.prefix_locks:
+                Package.prefix_locks[prefix] = llnl.util.lock.Lock(
+                    spack.installed_db.prefix_lock_path,
+                    self.spec.dag_hash_bit_prefix(sys.maxsize.bit_length()), 1)
+
+            self._prefix_lock = Package.prefix_locks[prefix]
 
         return self._prefix_lock
 
